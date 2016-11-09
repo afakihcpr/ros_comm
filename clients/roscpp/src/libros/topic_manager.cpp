@@ -484,6 +484,11 @@ bool TopicManager::registerSubscriber(const SubscriptionPtr& s, const string &da
     return false;
   }
 
+  if (payload.getType() == XmlRpcValue::TypeInvalid)
+  {
+    return false;
+  }
+
   vector<string> pub_uris;
   for (int i = 0; i < payload.size(); i++)
   {
