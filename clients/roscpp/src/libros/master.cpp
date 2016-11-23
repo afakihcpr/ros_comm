@@ -183,34 +183,41 @@ bool execute(const std::string& method, const XmlRpc::XmlRpcValue& request, XmlR
   std::string master_host = getHost();
   uint32_t master_port = getPort();
   XmlRpc::XmlRpcClient *c = XMLRPCManager::instance()->getXMLRPCClient(master_host, master_port, "/");
-  bool printed = false;
-  bool slept = false;
-  bool ok = true;
-  do
+
+  bool executed = false;
+
+  enum Attempts {First, Second, Multiple};
+  Attempts attempts = First;
+
+  while (!executed)
   {
-    bool b = false;
+    if (ros::isShuttingDown() && XMLRPCManager::instance()->isShuttingDown())
+    {
+      return false;
+    }
+
     {
 #if defined(__APPLE__)
       boost::mutex::scoped_lock lock(g_xmlrpc_call_mutex);
 #endif
 
-      b = c->execute(method.c_str(), request, response);
+      executed = c->execute(method.c_str(), request, response);
     }
 
-    ok = !ros::isShuttingDown() && !XMLRPCManager::instance()->isShuttingDown();
-
-    if (!b && ok)
+    if (attempts)
     {
-      if (!printed && wait_for_master)
+      if (attempts == Second)
       {
-        ROS_ERROR("[%s] Failed to contact master at [%s:%d].  %s", method.c_str(), master_host.c_str(), master_port, wait_for_master ? "Retrying..." : "");
-        printed = true;
-      }
-
-      if (!wait_for_master)
-      {
-        XMLRPCManager::instance()->releaseXMLRPCClient(c);
-        return false;
+        if (wait_for_master)
+        {
+          ROS_ERROR("[%s] Failed to contact master at [%s:%d].  %s", method.c_str(), master_host.c_str(), master_port, wait_for_master ? "Retrying..." : "");
+        }
+        else
+        {
+          XMLRPCManager::instance()->releaseXMLRPCClient(c);
+          return false;
+        }
+        attempts = Multiple;
       }
 
       if (!g_retry_timeout.isZero() && (ros::WallTime::now() - start_time) >= g_retry_timeout)
@@ -221,30 +228,26 @@ bool execute(const std::string& method, const XmlRpc::XmlRpcValue& request, XmlR
       }
 
       ros::WallDuration(0.05).sleep();
-      slept = true;
     }
     else
     {
-      if (!XMLRPCManager::instance()->validateXmlrpcResponse(method, response, payload))
-      {
-        XMLRPCManager::instance()->releaseXMLRPCClient(c);
-
-        return false;
-      }
-
-      break;
+      attempts = Second;
     }
+  } // while(!executed)
 
-    ok = !ros::isShuttingDown() && !XMLRPCManager::instance()->isShuttingDown();
-  } while(ok);
 
-  if (ok && slept)
+  if (!XMLRPCManager::instance()->validateXmlrpcResponse(method, response, payload))
+  {
+    XMLRPCManager::instance()->releaseXMLRPCClient(c);
+    return false;
+  }
+
+  if (attempts == Multiple)
   {
     ROS_INFO("Connected to master at [%s:%d]", master_host.c_str(), master_port);
   }
 
   XMLRPCManager::instance()->releaseXMLRPCClient(c);
-
   return true;
 }
 
